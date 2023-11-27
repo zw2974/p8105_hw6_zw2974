@@ -9,6 +9,10 @@ output: github_document
 library(tidyverse)
 library(broom)
 library(boot)
+library(readr)
+library(purrr)
+library(mgcv)
+library(modelr)
 set.seed(1)
 ```
 
@@ -101,6 +105,87 @@ b0b1_dist
 
 This plot is also a density plot of bootstrapped Log Beta Product estimates. It follows the normal distribution.
 
+## Problem 2
+#### Import and Tidy Data
+```{r}
+birthweight = read_csv("data/birthweight.csv")
+birth = 
+  birthweight |> 
+  janitor::clean_names() |> 
+  mutate(babysex = case_when(babysex == 1 ~ 'male',
+                             babysex == 2 ~ 'female'),
+         frace = recode(frace, "1" = "White", "2" = "Black", "3" = "Asian", "4" = "Puerto Rican", "8" = "Other", "9" = "Unknown"),
+         malform = case_when(malform == 0 ~ 'absent',
+                             malform == 1 ~ 'present'),
+         mrace = recode(mrace, "1" = "White", "2" = "Black", "3" = "Asian", "4" = "Puerto Rican", "8" = "Other")) |> 
+  na.omit()
+```
+## Regression Model
+Assume all variables as predictors and perform MLR
+```{r}
+mlr = lm(bwt ~ ., data = birth)
+mlr |> 
+  broom::tidy() |> 
+  knitr::kable()
+```
+#### Plot the model residuals against fitted values
+
+```{r}
+birth |> 
+    add_predictions(mlr) |>  
+    add_residuals(mlr) |> 
+    ggplot(aes(x = pred, y = resid)) +
+    geom_point()  + 
+    geom_smooth(method = "lm") + 
+    labs(title = "Residuals against fitted values", 
+       x = "Fitted Values", 
+       y = "Residuals")
+```
+We can find from the graph that the slope is 0, which means we have to choose predictors to measure the relationship.
+
+#### Compare model to others
+A model that employs only the baby's length at birth and gestational age as its main predictors, without considering any interaction effects between these variables.
+
+A model that includes the baby's head circumference, length at birth, and sex as predictors, and additionally incorporates all possible interaction effects, including two-way interactions between each pair of these variables as well as the three-way interaction among head circumference, length, and sex.
+```{r}
+# model comparison 1
+model_bg = lm(bwt ~ blength + gaweeks, data = birth) |> 
+  broom::tidy() |> 
+  knitr::kable()
+
+# model comparison 2
+model_bbb = lm(bwt ~ bhead * blength * babysex, data = birth) |> 
+  broom::tidy() |> 
+  knitr::kable()
+model_bg
+```
+#### Compare these models by evaluating their cross-validated prediction errors. Utilize the `crossv_mc` function for cross-validation and apply relevant functions from the `purrr` package as needed for this analysis.
+```{r}
+cv_df = 
+  crossv_mc(birth, 100) |> 
+  mutate(
+    mod1 = map(train, \(train) lm(bwt ~ blength + gaweeks, data = train) ),
+    mod2 = map(train, \(train) lm(bwt ~ bhead * blength * babysex, data = train)),
+    mod3 = map(train, \(train) lm(bwt ~ ., data = train))
+  ) |> 
+  mutate(
+    rmse_mod1 = map2_dbl(mod1, test, \(mod, test) rmse(model = mod, data = test)),
+    rmse_mod2 = map2_dbl(mod2, test, \(mod, test) rmse(model = mod, data = test)),
+    rmse_mod3 = map2_dbl(mod3, test, \(mod, test) rmse(model = mod, data = test))
+  )
+cv_df
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+Based on the analysis, it can be inferred that model3, which incorporates all predictors, exhibits the most favorable distribution of Root Mean Square Error (RMSE), showcasing the smallest RMSE values. Conversely, model1, which only uses birth length and gestational age as predictors, demonstrates the least favorable distribution, indicated by the largest RMSE values.
 
 
 
